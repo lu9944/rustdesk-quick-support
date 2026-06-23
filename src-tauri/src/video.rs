@@ -24,10 +24,16 @@ pub struct EncodedFrame {
 /// Current subscriber (the active connection's frame channel).
 static SUBSCRIBER: Lazy<Mutex<Option<mpsc::Sender<EncodedFrame>>>> = Lazy::new(|| Mutex::new(None));
 static STARTED: AtomicBool = AtomicBool::new(false);
+/// Set whenever a new subscriber attaches so the capture loop emits a fresh
+/// keyframe — without it a reconnecting client only gets P-frames it can't
+/// decode (the encoder's natural IDR interval may be many seconds away).
+static NEED_KEYFRAME: AtomicBool = AtomicBool::new(true);
 
 /// Set the active frame subscriber (called by a connection on login).
 pub fn set_subscriber(tx: mpsc::Sender<EncodedFrame>) {
     *SUBSCRIBER.lock().unwrap() = Some(tx);
+    // Make the very next encoded frame a keyframe so the new client can decode.
+    NEED_KEYFRAME.store(true, Ordering::SeqCst);
 }
 
 pub fn clear_subscriber() {
@@ -76,6 +82,9 @@ fn capture_once() -> Result<()> {
         .max_frame_rate(FrameRate::from_hz(15.0))
         .bitrate(BitRate::from_bps(2_000_000))
         .complexity(Complexity::Low)
+        .intra_frame_period(openh264::encoder::IntraFramePeriod::from_num_frames(
+            30,
+        ))
         .num_threads(threads);
     let mut encoder = Encoder::with_api_config(OpenH264API::from_source(), config)?;
     info!("video encoder: screen-content, low complexity, {threads} threads");
@@ -137,6 +146,11 @@ fn capture_once() -> Result<()> {
         let t_conv = t1.elapsed();
 
         let t2 = Instant::now();
+        // A new subscriber attached (or the stream just started): emit a
+        // keyframe so the client's decoder can sync immediately.
+        if NEED_KEYFRAME.swap(false, Ordering::SeqCst) {
+            encoder.force_intra_frame();
+        }
         let slice = RgbSliceU8::new(&rgb8, (we as usize, he as usize));
         let yuv = YUVBuffer::from_rgb8_source(slice);
         let bitstream = encoder.encode(&yuv)?;
@@ -161,12 +175,19 @@ fn capture_once() -> Result<()> {
             key,
             pts: t0.elapsed().as_millis() as i64,
         };
-        // Deliver to the current subscriber (non-blocking; drop if gone).
+        // Deliver to the current subscriber. Only drop the subscriber when its
+        // receiver is gone (Closed); if it is merely busy (Full) we discard this
+        // single frame and keep the subscriber so video can resume next tick.
         let mut guard = SUBSCRIBER.lock().unwrap();
         if let Some(tx) = guard.as_ref() {
-            if tx.try_send(frame).is_err() {
-                // subscriber channel full or closed; clear it
-                *guard = None;
+            match tx.try_send(frame) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    // subscriber is consuming slowly; drop this frame, keep going
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    *guard = None;
+                }
             }
         }
 
