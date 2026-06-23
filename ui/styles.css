@@ -108,6 +108,39 @@ body {
     animation: pulse 2s infinite;
 }
 
+.status-dot.offline {
+    background: var(--text-muted, #888);
+    animation: pulse 1s infinite;
+}
+
+.server-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border, #eee);
+    font-size: 12px;
+    color: var(--text-muted, #888);
+}
+
+.server-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #888;
+    flex-shrink: 0;
+}
+
+.server-dot.online {
+    background: var(--success);
+}
+
+.server-dot.offline {
+    background: #f59e0b;
+    animation: pulse 1s infinite;
+}
+
 @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }

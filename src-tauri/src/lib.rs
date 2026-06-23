@@ -2,12 +2,18 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
+mod bytes_codec;
+mod codec;
 mod config;
-mod proto;
+mod connection;
+mod input;
+mod proto_gen;
+mod rendezvous;
+mod video;
 
 static APP_STATE: Lazy<Mutex<AppState>> = Lazy::new(|| {
     Mutex::new(AppState {
-        server_running: false,
+        server_online: false,
         peer_connected: false,
         peer_name: String::new(),
     })
@@ -15,17 +21,32 @@ static APP_STATE: Lazy<Mutex<AppState>> = Lazy::new(|| {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AppState {
-    server_running: bool,
+    server_online: bool,
     peer_connected: bool,
     peer_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ConnectionStatus {
+    server_online: bool,
     connected: bool,
     peer_name: String,
+    server: String,
     id: String,
     password: String,
+}
+
+pub fn set_server_online(online: bool) {
+    if let Ok(mut s) = APP_STATE.lock() {
+        s.server_online = online;
+    }
+}
+
+pub fn set_peer_connected(connected: bool, name: Option<String>) {
+    if let Ok(mut s) = APP_STATE.lock() {
+        s.peer_connected = connected;
+        s.peer_name = name.unwrap_or_default();
+    }
 }
 
 #[tauri::command]
@@ -41,9 +62,12 @@ fn get_password() -> String {
 #[tauri::command]
 fn get_status() -> ConnectionStatus {
     let state = APP_STATE.lock().unwrap();
+    let cfg = config::load();
     ConnectionStatus {
+        server_online: state.server_online,
         connected: state.peer_connected,
         peer_name: state.peer_name.clone(),
+        server: cfg.server.clone(),
         id: config::get_id(),
         password: config::get_password(),
     }
@@ -55,20 +79,22 @@ fn get_version() -> String {
 }
 
 pub fn run() {
-    env_logger::init();
+    // Default to INFO logging even when RUST_LOG is not set, so `cargo run`
+    // shows the rendezvous connection progress in the terminal.
+    let _ = env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info"),
+    )
+    .try_init();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            let app_handle = app.handle().clone();
-
-            std::thread::spawn(move || {
+            let _app_handle = app.handle().clone();
+            video::start_global();
+            std::thread::spawn(|| {
                 let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async {
-                    config::start_server(app_handle).await;
-                });
+                rt.block_on(rendezvous::run());
             });
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

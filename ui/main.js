@@ -35,10 +35,24 @@ function updateDisplay(data) {
             statusText.textContent += " - " + data.peer_name;
         }
         statusMessage.innerHTML = "<p>Your device is currently being controlled remotely.</p>";
-    } else {
+    } else if (data.server_online) {
         statusDot.className = "status-dot waiting";
         statusText.textContent = "Waiting for connection";
-        statusMessage.innerHTML = "<p>Allow remote control by sharing your ID and password with your supporter.</p>";
+        statusMessage.innerHTML = "<p>Connected to server. Share your ID and password with your supporter to allow remote control.</p>";
+    } else {
+        statusDot.className = "status-dot offline";
+        statusText.textContent = "Connecting to server...";
+        statusMessage.innerHTML = "<p>Connecting to the rendezvous server. Check your <code>.env</code> and network.</p>";
+    }
+
+    const serverDot = document.getElementById("serverDot");
+    const serverText = document.getElementById("serverText");
+    if (data.server_online) {
+        serverDot.className = "server-dot online";
+        serverText.textContent = "Connected to server: " + (data.server || "—");
+    } else {
+        serverDot.className = "server-dot offline";
+        serverText.textContent = "Server: " + (data.server || "—") + " (connecting...)";
     }
 }
 
