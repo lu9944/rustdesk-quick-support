@@ -39,7 +39,13 @@ openh264 = "0.7"
 enigo = { path = "../libs/enigo" }
 uuid = { version = "1", features = ["v4"] }
 whoami = "1.5"
+# file transfer compression (mirrors hbb_common compress.rs)
+zstd = "0.13"
+filetime = "0.2"
 
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Storage_FileSystem"] }
