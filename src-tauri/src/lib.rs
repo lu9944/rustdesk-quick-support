@@ -6,6 +6,7 @@ mod bytes_codec;
 mod codec;
 mod config;
 mod connection;
+mod fs;
 mod input;
 mod proto_gen;
 mod rendezvous;
@@ -16,6 +17,8 @@ static APP_STATE: Lazy<Mutex<AppState>> = Lazy::new(|| {
         server_online: false,
         peer_connected: false,
         peer_name: String::new(),
+        file_transfer_active: false,
+        file_transfer_label: String::new(),
     })
 });
 
@@ -24,6 +27,8 @@ struct AppState {
     server_online: bool,
     peer_connected: bool,
     peer_name: String,
+    file_transfer_active: bool,
+    file_transfer_label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,6 +39,8 @@ struct ConnectionStatus {
     server: String,
     id: String,
     password: String,
+    file_transfer_active: bool,
+    file_transfer_label: String,
 }
 
 pub fn set_server_online(online: bool) {
@@ -46,6 +53,13 @@ pub fn set_peer_connected(connected: bool, name: Option<String>) {
     if let Ok(mut s) = APP_STATE.lock() {
         s.peer_connected = connected;
         s.peer_name = name.unwrap_or_default();
+    }
+}
+
+pub fn set_file_transfer(active: bool, label: String) {
+    if let Ok(mut s) = APP_STATE.lock() {
+        s.file_transfer_active = active;
+        s.file_transfer_label = label;
     }
 }
 
@@ -70,6 +84,8 @@ fn get_status() -> ConnectionStatus {
         server: cfg.server.clone(),
         id: config::get_id(),
         password: config::get_password(),
+        file_transfer_active: state.file_transfer_active,
+        file_transfer_label: state.file_transfer_label.clone(),
     }
 }
 

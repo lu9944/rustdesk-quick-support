@@ -3,10 +3,13 @@
 // slow video writes can never starve incoming input or TestDelay pings.
 use crate::codec::{PeerHalves, Encrypt};
 use crate::config::DeviceConfig;
+use crate::fs;
 use crate::input;
 use crate::proto_gen::message::{
-    self, message::Union as mu, EncodedVideoFrame, EncodedVideoFrames, Hash, IdPk, KeyEvent,
-    LoginResponse, Message, MouseEvent, PeerInfo, SignedId, SupportedEncoding, TestDelay, VideoFrame,
+    self, file_action::Union as fau, file_response::Union as fru, login_request::Union as lu,
+    message::Union as mu, EncodedVideoFrame, EncodedVideoFrames, FileAction, FileResponse, Hash,
+    IdPk, KeyEvent, LoginResponse, Message, MouseEvent, PeerInfo, SignedId, SupportedEncoding,
+    TestDelay, VideoFrame,
 };
 use crate::proto_gen::rendezvous::{RequestRelay, RendezvousMessage};
 use crate::video;
@@ -17,6 +20,7 @@ use rand::Rng;
 use sha2::{Digest, Sha256};
 use sodiumoxide::crypto::{box_, sign};
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc as std_mpsc;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -89,14 +93,39 @@ pub async fn serve_relay(tcp: TcpStream, cfg: DeviceConfig, uuid: String, peer_a
     hm.set_hash(hash);
     writer.send_msg(&hm).await?;
 
-    // --- Outgoing channel + writer task ---
+    // --- Outgoing channels + writer task ---
+    // Two channels feed the single writer:
+    //   * `out_tx` (unbounded): immediate control messages (login response,
+    //     TestDelay, video frames, dir listings, transfer confirmations).
+    //   * `ft_tx`  (bounded):   bulk file-transfer BLOCKS from read jobs, so a
+    //     slow network backpressures the pump instead of buffering a whole file
+    //     in memory. Ordering is preserved within each channel; the two never
+    //     interleave for the same job (blocks + their Digest/Done all go via
+    //     `ft_tx`, everything else via `out_tx`).
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Message>();
+    let (ft_tx, mut ft_rx) = mpsc::channel::<Message>(16);
     let mut writer = writer;
     let writer_task = tokio::spawn(async move {
-        while let Some(msg) = out_rx.recv().await {
-            if let Err(e) = writer.send_msg(&msg).await {
-                warn!("writer send failed: {e}");
-                break;
+        loop {
+            tokio::select! {
+                msg = out_rx.recv() => match msg {
+                    Some(m) => {
+                        if let Err(e) = writer.send_msg(&m).await {
+                            warn!("writer send failed: {e}");
+                            break;
+                        }
+                    }
+                    None => break,
+                },
+                msg = ft_rx.recv() => match msg {
+                    Some(m) => {
+                        if let Err(e) = writer.send_msg(&m).await {
+                            warn!("writer send failed: {e}");
+                            break;
+                        }
+                    }
+                    None => {}
+                },
             }
         }
     });
@@ -113,8 +142,19 @@ pub async fn serve_relay(tcp: TcpStream, cfg: DeviceConfig, uuid: String, peer_a
     });
 
     // --- Video subscriber ---
-    let (vtx, mut vrx) = mpsc::channel::<video::EncodedFrame>(2);
+    let (vtx, mut vrx) = mpsc::channel::<video::EncodedFrame>(5);
     let mut video_started = false;
+
+    // --- File transfer state ---
+    // `read_jobs` pump files to the peer (downloads); `write_jobs` receive
+    // uploads. The read pump ticks every 1ms so outbound blocks flow even while
+    // the reader branch is idle (the usual case during a download).
+    let mut read_jobs: Vec<fs::TransferJob> = Vec::new();
+    let mut write_jobs: Vec<fs::TransferJob> = Vec::new();
+    let mut read_pump = tokio::time::interval(std::time::Duration::from_millis(1));
+    read_pump.reset();
+
+    crate::set_file_transfer(false, String::new());
 
     // --- Reader loop: incoming messages + video frames ---
     loop {
@@ -129,11 +169,31 @@ pub async fn serve_relay(tcp: TcpStream, cfg: DeviceConfig, uuid: String, peer_a
                         };
                         match m.union {
                             Some(mu::LoginRequest(lr)) => {
+                                // A dedicated file-transfer session carries the
+                                // initial directory the controller wants to list.
+                                let ft = match &lr.union {
+                                    Some(lu::FileTransfer(ft)) => {
+                                        Some((ft.dir.clone(), ft.show_hidden))
+                                    }
+                                    _ => None,
+                                };
                                 if verify_login(&cfg, &salt, &challenge, &lr.password) {
                                     info!("controller logged in: {}", lr.my_name);
                                     crate::set_peer_connected(true, Some(lr.my_name.clone()));
                                     let _ = out_tx.send(login_ok_msg(&cfg));
-                                    if !video_started {
+                                    if let Some((dir, show_hidden)) = ft {
+                                        // File-transfer session: reply with the initial
+                                        // directory listing (home dir when the controller
+                                        // gave none or an invalid path) so the file manager
+                                        // shows content immediately. Mirrors hbb_common's
+                                        // read_dir fallback.
+                                        let dir = if !dir.is_empty() && Path::new(&dir).is_dir() {
+                                            dir.as_str()
+                                        } else {
+                                            ""
+                                        };
+                                        send_dir_listing(dir, show_hidden, &out_tx);
+                                    } else if !video_started {
                                         video_started = true;
                                         video::set_subscriber(vtx.clone());
                                     }
@@ -161,6 +221,15 @@ pub async fn serve_relay(tcp: TcpStream, cfg: DeviceConfig, uuid: String, peer_a
                                     break;
                                 }
                             }
+                            Some(mu::FileAction(fa)) => {
+                                handle_file_action(fa, &mut read_jobs, &mut write_jobs, &out_tx)
+                                    .await;
+                                update_transfer_status(&read_jobs, &write_jobs);
+                            }
+                            Some(mu::FileResponse(fr)) => {
+                                handle_file_response(fr, &mut write_jobs, &out_tx).await;
+                                update_transfer_status(&read_jobs, &write_jobs);
+                            }
                             Some(other) => {
                                 warn!("unhandled message: {:?}", other);
                             }
@@ -176,13 +245,246 @@ pub async fn serve_relay(tcp: TcpStream, cfg: DeviceConfig, uuid: String, peer_a
                     let _ = out_tx.send(video_frame_msg(frame));
                 }
             }
+            _ = read_pump.tick() => {
+                if !read_jobs.is_empty() {
+                    pump_read_jobs(&mut read_jobs, &ft_tx).await;
+                    update_transfer_status(&read_jobs, &write_jobs);
+                }
+            }
         }
     }
 
     crate::set_peer_connected(false, None);
+    crate::set_file_transfer(false, String::new());
     video::clear_subscriber();
     writer_task.abort();
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// file transfer glue
+// ---------------------------------------------------------------------------
+
+/// Drive every active read (download) job by one step: send the next digest /
+/// block / done message. Done jobs are evicted. Outbound goes through the
+/// bounded `ft_tx` (slow-network backpressure); when it's full the unsent
+/// block is re-buffered onto the job and we yield so the reader branch can
+/// still process e.g. an incoming Cancel.
+async fn pump_read_jobs(jobs: &mut Vec<fs::TransferJob>, ft_tx: &mpsc::Sender<Message>) {
+    let mut finished = Vec::new();
+    let mut channel_full = false;
+    for idx in 0..jobs.len() {
+        loop {
+            let msg = match jobs[idx].next_read_outbound().await {
+                Ok(Some(m)) => m,
+                Ok(None) => break,
+                Err(e) => {
+                    let (id, file_num) = (jobs[idx].id, jobs[idx].file_num);
+                    warn!("read job {id}: {e}");
+                    finished.push(id);
+                    let _ = ft_tx.try_send(fs::new_error_msg(id, e, file_num));
+                    break;
+                }
+            };
+            match ft_tx.try_send(msg) {
+                Ok(()) => {
+                    if jobs[idx].is_done() && jobs[idx].pending.is_none() {
+                        finished.push(jobs[idx].id);
+                        break;
+                    }
+                }
+                Err(mpsc::error::TrySendError::Full(m)) => {
+                    // Re-buffer; yield this tick so the reader stays responsive.
+                    jobs[idx].pending = Some(m);
+                    channel_full = true;
+                    break;
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    warn!("file-transfer writer gone");
+                    return;
+                }
+            }
+        }
+        if channel_full {
+            break;
+        }
+    }
+    for id in finished {
+        fs::remove_job(id, jobs);
+    }
+}
+
+/// Read a directory and send the listing back as a `FileResponse::Dir` with
+/// `id = 0` (the id used for browsing, since `ReadDir` carries no id). An empty
+/// path falls back to the user's home directory, matching hbb_common's
+/// `read_dir`. Note: no `is_dir` pre-check here, so a Windows `/` reaches
+/// `fs::read_dir` which lists the drives.
+fn send_dir_listing(dir: &str, include_hidden: bool, out_tx: &mpsc::UnboundedSender<Message>) {
+    let path = if dir.is_empty() {
+        dirs_next::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+    } else {
+        fs::get_path(dir)
+    };
+    match fs::read_dir(&path, include_hidden) {
+        Ok(fd) => {
+            let _ = out_tx.send(fs::new_dir_msg(0, fd.path, fd.entries.into()));
+        }
+        Err(e) => {
+            warn!("read_dir({}): {e}", path.display());
+            let _ = out_tx.send(fs::new_error_msg(0, e, 0));
+        }
+    }
+}
+
+async fn handle_file_action(
+    fa: FileAction,
+    read_jobs: &mut Vec<fs::TransferJob>,
+    write_jobs: &mut Vec<fs::TransferJob>,
+    out_tx: &mpsc::UnboundedSender<Message>,
+) {
+    // Overwrite-detection digest handshake is intentionally disabled: we report
+    // a pre-1.1.10 version (CARGO_PKG_VERSION), so the official controller also
+    // skips it, guaranteeing the two sides agree and there is never a deadlock
+    // waiting for a digest/confirm that the other side won't send.
+    let od = false;
+    match fa.union {
+        Some(fau::ReadDir(rd)) => {
+            send_dir_listing(&rd.path, rd.include_hidden, out_tx);
+        }
+        Some(fau::AllFiles(f)) => match fs::get_recursive_files(&f.path, f.include_hidden) {
+            Ok(files) => {
+                let _ = out_tx.send(fs::new_dir_msg(f.id, f.path, files));
+            }
+            Err(e) => {
+                let _ = out_tx.send(fs::new_error_msg(f.id, e, -1));
+            }
+        },
+        // Controller wants to download from us -> we read local files.
+        Some(fau::Send(s)) => {
+            let base = fs::get_path(&s.path);
+            let files = match fs::get_recursive_files(&s.path, s.include_hidden) {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ = out_tx.send(fs::new_error_msg(s.id, e, -1));
+                    return;
+                }
+            };
+            if files.is_empty() {
+                let _ = out_tx.send(fs::new_error_msg(s.id, "no files", -1));
+                return;
+            }
+            let job = fs::TransferJob::new_read(s.id, s.path, base, files, od);
+            read_jobs.push(job);
+        }
+        // Controller wants to upload to us -> we write local files.
+        Some(fau::Receive(r)) => {
+            let base = fs::get_path(&r.path);
+            match fs::TransferJob::new_write(r.id, r.path, base, r.files.to_vec(), od) {
+                Ok(job) => write_jobs.push(job),
+                Err(e) => {
+                    let _ = out_tx.send(fs::new_error_msg(r.id, e, r.file_num));
+                }
+            }
+        }
+        Some(fau::SendConfirm(sc)) => {
+            if let Some(job) = read_jobs.iter_mut().find(|j| j.id == sc.id) {
+                job.on_send_confirm(&sc).await;
+            }
+        }
+        Some(fau::Cancel(c)) => {
+            if let Some(mut job) = fs::remove_job(c.id, read_jobs) {
+                job.cancel();
+            }
+            if let Some(mut job) = fs::remove_job(c.id, write_jobs) {
+                job.cancel();
+                // best-effort: drop the partial download
+                job.finish().await;
+            }
+        }
+        Some(other) => {
+            warn!("ignoring file action: {:?}", other);
+        }
+        None => {}
+    }
+}
+
+async fn handle_file_response(
+    fr: FileResponse,
+    write_jobs: &mut Vec<fs::TransferJob>,
+    out_tx: &mpsc::UnboundedSender<Message>,
+) {
+    match fr.union {
+        Some(fru::Block(block)) => {
+            if let Some(job) = write_jobs.iter_mut().find(|j| j.id == block.id) {
+                if let Err(e) = job.write_block(&block).await {
+                    warn!("write job {}: {}", job.id, e);
+                    let _ = out_tx.send(fs::new_error_msg(job.id, e, block.file_num));
+                }
+            }
+        }
+        Some(fru::Digest(d)) => {
+            if let Some(job) = write_jobs.iter().find(|j| j.id == d.id) {
+                let _ = out_tx.send(job.build_confirm_for_digest(&d));
+            }
+        }
+        Some(fru::Done(d)) => {
+            let job_id = d.id;
+            let file_num = d.file_num;
+            // The sender's `Done` means "I finished sending". We must finalize
+            // the file AND reply with our own `Done` so the sender knows the
+            // data was saved — otherwise its progress bar stalls near the end
+            // waiting for this acknowledgment (hbb_common ui_cm_interface does
+            // the same: `send_raw(fs::new_done(id, file_num), tx)`).
+            if let Some(mut job) = fs::remove_job(job_id, write_jobs) {
+                job.finish().await;
+                let _ = out_tx.send(fs::new_done_msg(job_id, file_num));
+            }
+        }
+        Some(fru::Error(err)) => {
+            // Peer reported a transfer error; drop matching jobs.
+            fs::remove_job(err.id, write_jobs);
+        }
+        _ => {}
+    }
+}
+
+/// Refresh the shared transfer indicator shown in the UI.
+fn update_transfer_status(read_jobs: &[fs::TransferJob], write_jobs: &[fs::TransferJob]) {
+    let active = read_jobs
+        .iter()
+        .chain(write_jobs.iter())
+        .find(|j| !j.is_done());
+    match active {
+        Some(j) => {
+            let arrow = if j.is_read { "↑" } else { "↓" };
+            let name = j.current_name();
+            let pct = if j.total_size > 0 {
+                (j.finished_size * 100 / j.total_size).min(100)
+            } else {
+                0
+            };
+            crate::set_file_transfer(
+                true,
+                format!("{arrow} {name}  {pct}%  {}", fmt_size(j.finished_size)),
+            );
+        }
+        None => crate::set_file_transfer(false, String::new()),
+    }
+}
+
+fn fmt_size(n: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i + 1 < UNITS.len() {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{n} {}", UNITS[0])
+    } else {
+        format!("{v:.1} {}", UNITS[i])
+    }
 }
 
 fn verify_login(cfg: &DeviceConfig, salt: &str, challenge: &str, got: &[u8]) -> bool {

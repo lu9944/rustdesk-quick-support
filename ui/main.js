@@ -54,12 +54,29 @@ function updateDisplay(data) {
         serverDot.className = "server-dot offline";
         serverText.textContent = "Server: " + (data.server || "—") + " (connecting...)";
     }
+
+    const transferInfo = document.getElementById("transferInfo");
+    const transferText = document.getElementById("transferText");
+    if (data.file_transfer_active) {
+        transferInfo.style.display = "";
+        transferText.textContent = data.file_transfer_label || "Transferring files...";
+    } else {
+        transferInfo.style.display = "none";
+    }
+}
+
+let pollHandle = null;
+function schedulePoll(intervalMs) {
+    if (pollHandle) clearInterval(pollHandle);
+    pollHandle = setInterval(refreshStatus, intervalMs);
 }
 
 async function refreshStatus() {
     try {
         const status = await invoke("get_status");
         updateDisplay(status);
+        // Refresh faster while a transfer is in progress for live progress.
+        schedulePoll(status.file_transfer_active ? 1000 : 5000);
     } catch (e) {
         console.error("Failed to get status:", e);
         document.getElementById("statusText").textContent = "Error: " + e;
@@ -114,7 +131,6 @@ async function init() {
     }
 
     await refreshStatus();
-    setInterval(refreshStatus, 5000);
 }
 
 window.addEventListener("DOMContentLoaded", init);
