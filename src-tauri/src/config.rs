@@ -25,6 +25,11 @@ pub const RELAY_PORT: u16 = 21117;
 pub struct DeviceConfig {
     pub id: String,
     pub password: String,
+    /// Permanent salt for the login password hash. Must stay stable across
+    /// connections so the controller's *remembered* password (which it stores
+    /// as `SHA256(plain + salt)`) keeps validating. Matches hbb_common's
+    /// `get_effective_permanent_password_salt` semantics.
+    pub password_salt: String,
     pub server: String,
     pub licence_key: String,
     pub socks5: String,
@@ -82,6 +87,11 @@ fn generate_password() -> String {
         .collect()
 }
 
+fn random_hex(n: usize) -> String {
+    let mut rng = rand::thread_rng();
+    (0..n).map(|_| format!("{:02x}", rng.gen::<u8>())).collect()
+}
+
 static CONFIG: OnceLock<DeviceConfig> = OnceLock::new();
 
 pub fn load() -> &'static DeviceConfig {
@@ -112,6 +122,7 @@ fn build_config() -> Result<DeviceConfig> {
     let config_path = config_file();
     let mut saved_id = String::new();
     let mut saved_password = String::new();
+    let mut saved_salt = String::new();
     let mut saved_sk = String::new();
     let mut saved_pk = String::new();
     let mut saved_uuid = String::new();
@@ -122,6 +133,7 @@ fn build_config() -> Result<DeviceConfig> {
                 match k.trim() {
                     "id" => saved_id = v.trim().to_string(),
                     "password" => saved_password = v.trim().to_string(),
+                    "salt" => saved_salt = v.trim().to_string(),
                     "sk" => saved_sk = v.trim().to_string(),
                     "pk" => saved_pk = v.trim().to_string(),
                     "uuid" => saved_uuid = v.trim().to_string(),
@@ -138,6 +150,14 @@ fn build_config() -> Result<DeviceConfig> {
     let password = env_string("RUSTDESK_PASSWORD")
         .or_else(|| if saved_password.is_empty() { None } else { Some(saved_password.clone()) })
         .unwrap_or_else(generate_password);
+
+    // Permanent password salt. Reuse the saved one if present so already-paired
+    // controllers keep validating; otherwise generate and persist it once.
+    let password_salt = if saved_salt.is_empty() {
+        random_hex(16)
+    } else {
+        saved_salt.clone()
+    };
 
     // Ed25519 signing keypair (registered with the rendezvous server as the
     // device public key). Persist so the server sees a stable identity.
@@ -164,9 +184,10 @@ fn build_config() -> Result<DeviceConfig> {
 
     // Persist everything for next run.
     let content = format!(
-        "id={}\npassword={}\nsk={}\npk={}\nuuid={}\n",
+        "id={}\npassword={}\nsalt={}\nsk={}\npk={}\nuuid={}\n",
         id,
         password,
+        password_salt,
         hex::encode(&sign_sk),
         hex::encode(&sign_pk),
         uuid,
@@ -183,6 +204,7 @@ fn build_config() -> Result<DeviceConfig> {
     let cfg = DeviceConfig {
         id,
         password,
+        password_salt,
         server,
         licence_key: std::env::var("RUSTDESK_KEY").unwrap_or_default(),
         socks5: std::env::var("RUSTDESK_SOCKS5").unwrap_or_default(),

@@ -77,7 +77,10 @@ pub async fn serve_relay(tcp: TcpStream, cfg: DeviceConfig, uuid: String, peer_a
     info!("secure stream established with {peer_addr}");
 
     // --- Send Hash (salt + challenge) ---
-    let salt = random_hex(16);
+    // The salt is the PERMANENT device salt (stable across connections) so that
+    // a controller using a remembered password — stored as SHA256(plain+salt) —
+    // keeps validating. The challenge rotates per connection for freshness.
+    let salt = cfg.password_salt.clone();
     let challenge = random_alnum(6);
     let mut hash = Hash::new();
     hash.salt = salt.clone();
@@ -278,11 +281,6 @@ fn platform_str() -> &'static str {
     {
         "Unknown"
     }
-}
-
-fn random_hex(n: usize) -> String {
-    let mut rng = rand::thread_rng();
-    (0..n).map(|_| format!("{:02x}", rng.gen::<u8>())).collect()
 }
 
 fn random_alnum(n: usize) -> String {
