@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RustDesk QuickSupport</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app">
+        <header class="header">
+            <div class="logo">
+                <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                    <rect width="32" height="32" rx="8" fill="#2563EB"/>
+                    <path d="M8 16C8 11.6 11.6 8 16 8V12C13.8 12 12 13.8 12 16H8Z" fill="white"/>
+                    <path d="M16 24C11.6 24 8 20.4 8 16H12C12 18.2 13.8 20 16 20V24Z" fill="white"/>
+                    <path d="M24 16C24 20.4 20.4 24 16 24V20C18.2 20 20 18.2 20 16H24Z" fill="white"/>
+                    <path d="M16 8C20.4 8 24 11.6 24 16H20C20 13.8 18.2 12 16 12V8Z" fill="white"/>
+                </svg>
+                <span class="logo-text">RustDesk</span>
+            </div>
+            <span class="subtitle">QuickSupport</span>
+        </header>
+
+        <main class="main">
+            <div class="card">
+                <div class="card-header">
+                    <div class="status-dot" id="statusDot"></div>
+                    <span id="statusText">Waiting for connection</span>
+                </div>
+
+                <div class="info-section">
+                    <div class="info-block">
+                        <label class="info-label">Your ID</label>
+                        <div class="info-value-container">
+                            <span class="info-value" id="deviceId">--- --- ---</span>
+                            <button class="copy-btn" onclick="copyToClipboard('deviceId')" title="Copy ID">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                    <rect x="5" y="5" width="9" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                                    <path d="M3 11H2C1.4 11 1 10.6 1 10V2C1 1.4 1.4 1 2 1H10C10.6 1 11 1.4 11 2V3" stroke="currentColor" stroke-width="1.5"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="info-block">
+                        <label class="info-label">Password</label>
+                        <div class="info-value-container">
+                            <span class="info-value password" id="password">------</span>
+                            <button class="copy-btn" onclick="copyToClipboard('password')" title="Copy Password">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+                                    <rect x="5" y="5" width="9" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/>
+                                    <path d="M3 11H2C1.4 11 1 10.6 1 10V2C1 1.4 1.4 1 2 1H10C10.6 1 11 1.4 11 2V3" stroke="currentColor" stroke-width="1.5"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="status-message" id="statusMessage">
+                    <p>Allow remote control by sharing your ID and password with your supporter.</p>
+                </div>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <span id="version">v0.1.0</span>
+        </footer>
+    </div>
+    <script src="main.js"></script>
+</body>
+</html>
