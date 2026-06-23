@@ -401,10 +401,57 @@ async fn handle_file_action(
                 job.finish().await;
             }
         }
+        // Remove a directory (recursive flag controls depth).
+        Some(fau::RemoveDir(d)) => {
+            info!("file op: remove_dir id={} path={} recursive={}", d.id, d.path, d.recursive);
+            let path = fs::get_path(&d.path);
+            let res = if d.recursive {
+                std::fs::remove_dir_all(&path).map_err(anyhow::Error::from)
+            } else {
+                std::fs::remove_dir(&path).map_err(anyhow::Error::from)
+            };
+            reply_fs_result(res, d.id, 0, out_tx);
+        }
+        // Remove a single file.
+        Some(fau::RemoveFile(f)) => {
+            info!("file op: remove_file id={} path={} file_num={}", f.id, f.path, f.file_num);
+            reply_fs_result(fs::remove_file(&f.path), f.id, f.file_num, out_tx);
+        }
+        // Create a directory (mkdir -p).
+        Some(fau::Create(c)) => {
+            info!("file op: create_dir id={} path={}", c.id, c.path);
+            reply_fs_result(fs::create_dir(&c.path), c.id, 0, out_tx);
+        }
+        // Rename a file / directory within its parent.
+        Some(fau::Rename(r)) => {
+            info!("file op: rename id={} path={} new_name={}", r.id, r.path, r.new_name);
+            reply_fs_result(fs::rename_file(&r.path, &r.new_name), r.id, 0, out_tx);
+        }
         Some(other) => {
             warn!("ignoring file action: {:?}", other);
         }
         None => {}
+    }
+}
+
+/// Report a controller-driven filesystem mutation back to the controller:
+/// `FileResponse::Done` on success, `FileResponse::Error` on failure. Matches
+/// hbb_common's `handle_result` (ui_cm_interface.rs).
+fn reply_fs_result(
+    res: anyhow::Result<()>,
+    id: i32,
+    file_num: i32,
+    out_tx: &mpsc::UnboundedSender<Message>,
+) {
+    match res {
+        Ok(()) => {
+            info!("file op job {id} ok -> reply Done");
+            let _ = out_tx.send(fs::new_done_msg(id, file_num));
+        }
+        Err(e) => {
+            warn!("file op job {id} failed: {e} -> reply Error");
+            let _ = out_tx.send(fs::new_error_msg(id, e, file_num));
+        }
     }
 }
 

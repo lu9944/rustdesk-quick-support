@@ -233,6 +233,51 @@ pub fn get_recursive_files(path: &str, include_hidden: bool) -> Result<Vec<FileE
 }
 
 // ---------------------------------------------------------------------------
+// filesystem mutations (remove / create / rename) — controller-driven, like
+// hbb_common::fs. Paths are controller-supplied absolute paths; we validate
+// against null bytes / emptiness and, for the new name in rename, traversal.
+// ---------------------------------------------------------------------------
+
+fn validate_fs_path_argument(path: &str, arg_name: &str) -> Result<()> {
+    if path.is_empty() {
+        bail!("{arg_name} cannot be empty");
+    }
+    if path.bytes().any(|b| b == 0) {
+        bail!("{arg_name} contains null bytes");
+    }
+    Ok(())
+}
+
+pub fn remove_file(path: &str) -> Result<()> {
+    validate_fs_path_argument(path, "file path")?;
+    std::fs::remove_file(get_path(path))?;
+    Ok(())
+}
+
+pub fn create_dir(path: &str) -> Result<()> {
+    validate_fs_path_argument(path, "directory path")?;
+    std::fs::create_dir_all(get_path(path))?;
+    Ok(())
+}
+
+pub fn rename_file(path: &str, new_name: &str) -> Result<()> {
+    validate_fs_path_argument(path, "path")?;
+    if new_name.is_empty() {
+        bail!("new file name cannot be empty");
+    }
+    validate_file_name_no_traversal(new_name)?;
+    let src = std::path::Path::new(path);
+    if !src.exists() {
+        bail!("{path:?} not exists");
+    }
+    let parent = src
+        .parent()
+        .ok_or_else(|| anyhow!("parent directory of {path:?} not found"))?;
+    std::fs::rename(src, parent.join(new_name))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // transfer job
 // ---------------------------------------------------------------------------
 
