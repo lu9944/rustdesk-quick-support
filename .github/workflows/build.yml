@@ -20,8 +20,9 @@ on:
         default: ""
       publish:
         description: "是否发布到 Release（自动生成预发布 tag）"
+        type: boolean
         required: false
-        default: "true"
+        default: true
   push:
     tags:
       - 'v*'
