@@ -2,7 +2,42 @@
 
 一键运行的远程协助客户端（受控端），类似 TeamViewer QuickSupport。对方双击打开即可看到 ID 和密码，你用 RustDesk 控制端输入 ID 即可连接。
 
-## 配置服务器
+## 下载与运行
+
+到 [Releases](https://github.com/lu9944/rustdesk-quick-support/releases) 下载对应平台的产物（服务器配置已内置，无需再设置）。
+
+### Windows
+
+下载 `RustDesk-QuickSupport-windows-x86_64.exe`，**双击直接运行**（单文件，无需安装；调用系统 WebView2，Win10+ 自带）。
+
+### Linux
+
+下载 `.AppImage`，加可执行权限后双击运行：
+
+```bash
+chmod +x RustDesk-QuickSupport-*.AppImage
+./RustDesk-QuickSupport-*.AppImage
+```
+
+### macOS
+
+> macOS 产物做了 ad-hoc 签名但**未做 Apple 公证**，从网页下载首次打开会被 Gatekeeper 拦截。按下面任一方式解锁即可（app 名无空格，命令无需加引号）。
+
+1. 下载 `.dmg`（Apple 芯片用 `_aarch64.dmg`，Intel 用 `_x86_64.dmg`），打开后把 `RustDeskQuickSupport.app` 拖入 `应用程序`（Applications）。
+2. **清除隔离属性**（推荐，一次即可）：
+
+   ```bash
+   xattr -cr /Applications/RustDeskQuickSupport.app
+   ```
+
+   或者不用终端：在 `访达 → 应用程序` 里**右键** `RustDeskQuickSupport` → `打开` → `打开`。
+3. 之后**双击**即可正常运行。
+
+> 提示：要彻底免 `xattr`、下载即双击零提示，需用付费 Apple Developer 账号做签名 + 公证；当前为免证书方案。
+
+---
+
+## 配置服务器（给构建者）
 
 编辑项目根目录下的 `.env` 文件：
 
@@ -63,22 +98,7 @@ RUSTDESK_PASSWORD=
 
 > ✅ 配置是在**编译期**内置进二进制的：`src-tauri/build.rs` 读取 `.env`/环境变量，通过 `cargo:rustc-env` 固化，源码用 `option_env!()` 读取（见 `src-tauri/src/config.rs`）。因此通过 AppImage/DMG/便携 exe 分发的客户端**无需 `.env` 即可连接你指定的服务器**，双击即用。
 
-### macOS 首次运行（ad-hoc 签名，未公证）
-
-CI 构建的 `.dmg` 已做 **ad-hoc 签名**（`tauri.conf.json` 里 `bundle.macOS.signingIdentity = "-"`），但未做 Apple 公证。从网页下载（带隔离属性）首次打开仍会被 Gatekeeper 拦截，通常表现为"无法验证开发者"（比未签名的"已损坏"更易绕过）。任选其一解锁：
-
-```bash
-# 方式一：清除隔离属性（app 名无空格，命令可直接执行）
-xattr -cr /Applications/RustDeskQuickSupport.app
-```
-
-```bash
-# 方式二：在 Finder 中右键 App → 打开 → 打开（无需终端）
-```
-
-> app 名称特意去掉了空格（`RustDeskQuickSupport.app`），就是为了让 `xattr -cr` 命令无需加引号即可运行；窗口标题仍显示为 `RustDesk QuickSupport`。
->
-> 如需彻底消除该提示（免 `xattr`、免右键），需要 Apple 开发者证书做签名 + 公证（仅付费 Apple Developer 账号可行），可在 CI 中配置 `MACOS_CERTIFICATE` / `APPLE_ID` 等 secret 接入。
+> macOS 产物的运行方式见顶部[下载与运行](#macos)；CI 已对 `.app` 做 ad-hoc 签名（`tauri.conf.json` 里 `bundle.macOS.signingIdentity = "-"`）。
 
 ---
 
