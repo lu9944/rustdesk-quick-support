@@ -47,13 +47,14 @@ RUSTDESK_PASSWORD=
 
 **触发方式：**
 
-1. **手动**：GitHub 仓库 → Actions → `Build` → Run workflow。手动触发时会弹出三个输入框，直接填写即可把服务器配置**编译期内置**到产物里：
+1. **手动**：GitHub 仓库 → Actions → `Build` → Run workflow。手动触发时会弹出输入框，直接填写即可把服务器配置**编译期内置**到产物里：
    - `server`：中继服务器地址（域名或 IP，留空用默认 `rs-ny.rustdesk.com`）
    - `key`：服务器密钥（未开启认证则留空）
    - `socks5`：Socks5 代理 `host:port`（可选）
+   - `publish`：是否发布到 Release（默认 `true`，自动生成预发布 tag `v0.1.0-ci.<run>-<sha7>`）
 
-   构建完成后在该 run 页面下载 Artifacts。
-2. **自动发布**：推送 `v*` 形式的 tag，构建完成后自动创建 GitHub Release 并挂上全部产物（tag 触发时从 [Repository Secrets](#secrets) 读取配置）：
+   构建完成后产物既在该 run 的 Artifacts 里，也会（默认）发布为一条 **Pre-release**。
+2. **自动发布正式版**：推送 `v*` 形式的 tag，构建完成后自动创建正式 GitHub Release 并挂上全部产物（tag 触发时从[Repository Secrets](#secrets)读取配置）：
    ```bash
    git tag v0.1.0 && git push origin v0.1.0
    ```
