@@ -148,7 +148,7 @@ jobs:
           merge-multiple: true
 
       - name: List artifacts
-        run: ls -lhR artifacts
+        run: find artifacts -type f | sort
 
       - name: Compute release tag
         id: rel
@@ -170,4 +170,10 @@ jobs:
           name: ${{ steps.rel.outputs.tag }}
           prerelease: ${{ steps.rel.outputs.prerelease }}
           generate_release_notes: true
-          files: artifacts/*
+          # 递归匹配：产物嵌套在 nsis/ dmg/ appimage/ deb/ 子目录
+          files: |
+            artifacts/**/*.exe
+            artifacts/**/*.msi
+            artifacts/**/*.AppImage
+            artifacts/**/*.deb
+            artifacts/**/*.dmg
