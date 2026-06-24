@@ -41,8 +41,8 @@ RUSTDESK_PASSWORD=
 
 | 平台 | 产物 | 双击行为 |
 |------|------|----------|
-| Windows | NSIS `.exe` 安装包 | 安装并启动（自动装 WebView2） |
-| Linux | `.AppImage` + `.deb` | AppImage 单文件可直接运行 |
+| Windows | `RustDesk-QuickSupport-windows-x86_64.exe` | **单文件便携 exe，双击直接运行**（调用系统 WebView2，无需安装） |
+| Linux | `.AppImage` + `.deb` | AppImage 单文件可直接运行（需 `chmod +x`） |
 | macOS | `.dmg`（arm64 / x86_64 各一份） | 挂载后拖入 Applications |
 
 **触发方式：**

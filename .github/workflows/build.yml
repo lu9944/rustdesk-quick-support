@@ -44,19 +44,19 @@ jobs:
           - os: windows-latest
             label: windows-x86_64
             target: x86_64-pc-windows-msvc
-            bundles: nsis
+            bundle_args: "--no-bundle"
           - os: ubuntu-latest
             label: linux-x86_64
             target: x86_64-unknown-linux-gnu
-            bundles: appimage,deb
+            bundle_args: "--bundles appimage,deb"
           - os: macos-latest
             label: macos-arm64
             target: aarch64-apple-darwin
-            bundles: dmg
+            bundle_args: "--bundles dmg"
           - os: macos-latest
             label: macos-x86_64
             target: x86_64-apple-darwin
-            bundles: dmg
+            bundle_args: "--bundles dmg"
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -115,19 +115,35 @@ jobs:
           SOCKS5: ${{ inputs.socks5 || secrets.RUSTDESK_SOCKS5 }}
 
       - name: Build (${{ matrix.target }})
-        run: cargo tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+        run: cargo tauri build --target ${{ matrix.target }} ${{ matrix.bundle_args }}
+
+      - name: Collect double-click artifacts into dist/
+        # 把便携产物收集到一个扁平目录，命名清晰，便于发布与下载
+        shell: bash
+        run: |
+          set -e
+          shopt -s nullglob
+          mkdir -p dist
+          REL="target/${{ matrix.target }}/release"
+          # Windows: 单文件便携 exe（--no-bundle 产物，调用系统 WebView2，双击即用）
+          if [ -f "$REL/rustdesk-client.exe" ]; then
+            cp "$REL/rustdesk-client.exe" "dist/RustDesk-QuickSupport-${{ matrix.label }}.exe"
+          fi
+          # Linux: AppImage（单文件，双击运行）
+          for f in "$REL"/bundle/appimage/*.AppImage; do cp "$f" dist/; done
+          # Linux: deb（可选，apt 安装）
+          for f in "$REL"/bundle/deb/*.deb; do cp "$f" dist/; done
+          # macOS: dmg（挂载后拖入 Applications）
+          for f in "$REL"/bundle/dmg/*.dmg; do cp "$f" dist/; done
+          echo "---- dist/ ----"
+          ls -lh dist/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: rustdesk-quicksupport-${{ matrix.label }}
           if-no-files-found: error
-          path: |
-            target/${{ matrix.target }}/release/bundle/**/*.exe
-            target/${{ matrix.target }}/release/bundle/**/*.msi
-            target/${{ matrix.target }}/release/bundle/**/*.AppImage
-            target/${{ matrix.target }}/release/bundle/**/*.deb
-            target/${{ matrix.target }}/release/bundle/**/*.dmg
+          path: dist/*
 
   # ───────────────────────────────────────────────
   # 发布 Release
@@ -171,10 +187,9 @@ jobs:
           name: ${{ steps.rel.outputs.tag }}
           prerelease: ${{ steps.rel.outputs.prerelease }}
           generate_release_notes: true
-          # 递归匹配：产物嵌套在 nsis/ dmg/ appimage/ deb/ 子目录
+          # 产物已拍平在 artifacts/ 根目录
           files: |
-            artifacts/**/*.exe
-            artifacts/**/*.msi
-            artifacts/**/*.AppImage
-            artifacts/**/*.deb
-            artifacts/**/*.dmg
+            artifacts/*.exe
+            artifacts/*.AppImage
+            artifacts/*.deb
+            artifacts/*.dmg
