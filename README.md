@@ -35,6 +35,35 @@ RUSTDESK_PASSWORD=
 
 ---
 
+## CI 一键编译（GitHub Actions）
+
+仓库内置 `.github/workflows/build.yml`，会同时在 Windows / Linux / macOS 三个平台的官方 runner 上**原生编译**（比交叉编译更稳），产物双击即用：
+
+| 平台 | 产物 | 双击行为 |
+|------|------|----------|
+| Windows | NSIS `.exe` 安装包 | 安装并启动（自动装 WebView2） |
+| Linux | `.AppImage` + `.deb` | AppImage 单文件可直接运行 |
+| macOS | `.dmg`（arm64 / x86_64 各一份） | 挂载后拖入 Applications |
+
+**触发方式：**
+
+1. **手动**：GitHub 仓库 → Actions → `Build` → Run workflow。手动触发时会弹出三个输入框，直接填写即可把服务器配置**编译期内置**到产物里：
+   - `server`：中继服务器地址（域名或 IP，留空用默认 `rs-ny.rustdesk.com`）
+   - `key`：服务器密钥（未开启认证则留空）
+   - `socks5`：Socks5 代理 `host:port`（可选）
+
+   构建完成后在该 run 页面下载 Artifacts。
+2. **自动发布**：推送 `v*` 形式的 tag，构建完成后自动创建 GitHub Release 并挂上全部产物（tag 触发时从 [Repository Secrets](#secrets) 读取配置）：
+   ```bash
+   git tag v0.1.0 && git push origin v0.1.0
+   ```
+
+<a name="secrets"></a>**通过 Secrets 配置（用于 tag 自动发布）**：在仓库 Settings → Secrets and variables → Actions 添加 `RUSTDESK_SERVER`、`RUSTDESK_KEY`、`RUSTDESK_SOCKS5`，tag 触发时会读取并内置。
+
+> ✅ 配置是在**编译期**内置进二进制的：`src-tauri/build.rs` 读取 `.env`/环境变量，通过 `cargo:rustc-env` 固化，源码用 `option_env!()` 读取（见 `src-tauri/src/config.rs`）。因此通过 NSIS/AppImage/DMG 分发的客户端**无需 `.env` 即可连接你指定的服务器**，双击即用。
+
+---
+
 ## 前置依赖
 
 ```bash

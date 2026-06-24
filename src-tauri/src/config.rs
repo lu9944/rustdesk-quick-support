@@ -1,5 +1,5 @@
 // Persistent device config: id, password, Ed25519 signing keypair, uuid, and
-// server settings loaded from .env.
+// server settings baked into the binary at compile time (see build.rs + option_env!).
 use anyhow::Result;
 use log::info;
 use rand::Rng;
@@ -99,21 +99,22 @@ pub fn load() -> &'static DeviceConfig {
 }
 
 fn build_config() -> Result<DeviceConfig> {
-    match dotenv::dotenv() {
-        Ok(path) => log::info!(".env loaded from {}", path.display()),
-        Err(e) => log::warn!(".env not loaded ({e}); using defaults / saved config"),
-    }
+    // 服务器/密钥等配置由 build.rs 在编译期从 .env 内置（见 option_env!()）
     log::info!(
-        "raw env: RUSTDESK_SERVER={:?}, RUSTDESK_KEY={} ({} bytes), RUSTDESK_ID={:?}, RUSTDESK_PASSWORD={:?}",
-        std::env::var("RUSTDESK_SERVER").ok(),
-        if std::env::var("RUSTDESK_KEY").map(|v| !v.is_empty()).unwrap_or(false) {
+        "baked config: server={:?}, key={} ({} bytes), id={:?}, password={}",
+        option_env!("RUSTDESK_SERVER"),
+        if option_env!("RUSTDESK_KEY").map(|v| !v.is_empty()).unwrap_or(false) {
             "set"
         } else {
             "empty"
         },
-        std::env::var("RUSTDESK_KEY").map(|v| v.len()).unwrap_or(0),
-        std::env::var("RUSTDESK_ID").ok(),
-        std::env::var("RUSTDESK_PASSWORD").ok(),
+        option_env!("RUSTDESK_KEY").map(|v| v.len()).unwrap_or(0),
+        option_env!("RUSTDESK_ID"),
+        if option_env!("RUSTDESK_PASSWORD").is_some() {
+            "preset"
+        } else {
+            "auto"
+        },
     );
 
     // sodiumoxide needs global init for keypair generation.
@@ -143,11 +144,11 @@ fn build_config() -> Result<DeviceConfig> {
         }
     }
 
-    let id = env_string("RUSTDESK_ID")
+    let id = baked_str(option_env!("RUSTDESK_ID"))
         .or_else(|| if saved_id.is_empty() { None } else { Some(saved_id.clone()) })
         .unwrap_or_else(generate_id);
 
-    let password = env_string("RUSTDESK_PASSWORD")
+    let password = baked_str(option_env!("RUSTDESK_PASSWORD"))
         .or_else(|| if saved_password.is_empty() { None } else { Some(saved_password.clone()) })
         .unwrap_or_else(generate_password);
 
@@ -198,7 +199,7 @@ fn build_config() -> Result<DeviceConfig> {
         .map(|u| u.as_bytes().to_vec())
         .unwrap_or_default();
 
-    let server = env_string("RUSTDESK_SERVER")
+    let server = baked_str(option_env!("RUSTDESK_SERVER"))
         .unwrap_or_else(|| DEFAULT_RENDEZVOUS_SERVERS[0].to_string());
 
     let cfg = DeviceConfig {
@@ -206,8 +207,8 @@ fn build_config() -> Result<DeviceConfig> {
         password,
         password_salt,
         server,
-        licence_key: std::env::var("RUSTDESK_KEY").unwrap_or_default(),
-        socks5: std::env::var("RUSTDESK_SOCKS5").unwrap_or_default(),
+        licence_key: baked_str(option_env!("RUSTDESK_KEY")).unwrap_or_default(),
+        socks5: baked_str(option_env!("RUSTDESK_SOCKS5")).unwrap_or_default(),
         sign_sk,
         sign_pk,
         uuid: uuid_bytes,
@@ -224,10 +225,9 @@ fn build_config() -> Result<DeviceConfig> {
     Ok(cfg)
 }
 
-fn env_string(key: &str) -> Option<String> {
-    std::env::var(key)
-        .ok()
-        .filter(|s| !s.is_empty())
+/// 编译期内置值（来自 build.rs 的 cargo:rustc-env）→ 空值视为未设置。
+fn baked_str(v: Option<&'static str>) -> Option<String> {
+    v.map(|s| s.to_string()).filter(|s| !s.is_empty())
 }
 
 pub fn get_id() -> String {
