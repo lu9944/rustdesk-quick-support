@@ -11,6 +11,8 @@ mod input;
 mod proto_gen;
 mod rendezvous;
 mod video;
+#[cfg(target_os = "windows")]
+mod win_hide;
 
 static APP_STATE: Lazy<Mutex<AppState>> = Lazy::new(|| {
     Mutex::new(AppState {
@@ -104,9 +106,36 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .on_window_event(|window, event| {
+            // Restore an offscreen-hidden window when it regains focus (e.g. the
+            // user clicks our taskbar button after another app took foreground).
+            #[cfg(target_os = "windows")]
+            if let tauri::WindowEvent::Focused(focused) = event {
+                if *focused {
+                    if let Some((x, y)) = win_hide::take_restore() {
+                        let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+                    }
+                }
+            }
+        })
         .setup(|app| {
             let _app_handle = app.handle().clone();
             video::start_global();
+            // Install the minimize interceptor on the main window so that
+            // clicking minimize hides it offscreen (taskbar icon preserved)
+            // instead of entering WS_MINIMIZE state.
+            #[cfg(target_os = "windows")]
+            {
+                use tauri::Manager;
+                if let Some(win) = app.get_webview_window("main") {
+                    if let Ok(h) = win.hwnd() {
+                        // `h` is `windows::Win32::Foundation::HWND`; bridge to
+                        // the windows-sys isize handle via its raw `.0` pointer.
+                        let raw = h.0 as isize;
+                        win_hide::install(raw);
+                    }
+                }
+            }
             std::thread::spawn(|| {
                 let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(rendezvous::run());
