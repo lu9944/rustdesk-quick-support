@@ -63,9 +63,9 @@ RUSTDESK_PASSWORD=
 
 > ✅ 配置是在**编译期**内置进二进制的：`src-tauri/build.rs` 读取 `.env`/环境变量，通过 `cargo:rustc-env` 固化，源码用 `option_env!()` 读取（见 `src-tauri/src/config.rs`）。因此通过 AppImage/DMG/便携 exe 分发的客户端**无需 `.env` 即可连接你指定的服务器**，双击即用。
 
-### macOS 首次运行（未签名应用）
+### macOS 首次运行（ad-hoc 签名，未公证）
 
-CI 构建的 `.dmg` 未做 Apple 签名/公证，拖入 Applications 后首次打开会被 Gatekeeper 拦截（提示"已损坏"或"无法验证开发者"）。任选其一解锁：
+CI 构建的 `.dmg` 已做 **ad-hoc 签名**（`tauri.conf.json` 里 `bundle.macOS.signingIdentity = "-"`），但未做 Apple 公证。从网页下载（带隔离属性）首次打开仍会被 Gatekeeper 拦截，通常表现为"无法验证开发者"（比未签名的"已损坏"更易绕过）。任选其一解锁：
 
 ```bash
 # 方式一：清除隔离属性（app 名无空格，命令可直接执行）
@@ -78,7 +78,7 @@ xattr -cr /Applications/RustDeskQuickSupport.app
 
 > app 名称特意去掉了空格（`RustDeskQuickSupport.app`），就是为了让 `xattr -cr` 命令无需加引号即可运行；窗口标题仍显示为 `RustDesk QuickSupport`。
 >
-> 如需彻底消除该提示（免 `xattr`），需要 Apple 开发者证书做签名 + 公证，可在 CI 中配置 `MACOS_CERTIFICATE` / `APPLE_ID` 等 secret 接入。
+> 如需彻底消除该提示（免 `xattr`、免右键），需要 Apple 开发者证书做签名 + 公证（仅付费 Apple Developer 账号可行），可在 CI 中配置 `MACOS_CERTIFICATE` / `APPLE_ID` 等 secret 接入。
 
 ---
 
